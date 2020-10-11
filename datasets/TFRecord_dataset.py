@@ -107,17 +107,15 @@ class MultiTFRecordDataset(torch.utils.data.IterableDataset):
     """
 
     def __init__(self,
-                 data_pattern: str,
-                 index_pattern: typing.Union[str, None],
-                 splits: typing.Dict[str, float],
+                 file_list: list,
                  description: typing.Union[typing.List[str], typing.Dict[str, str], None] = None,
                  shuffle_queue_size: typing.Optional[int] = None,
                  transform: typing.Callable[[dict], typing.Any] = None) -> None:
         super(MultiTFRecordDataset, self).__init__()
-        self.data_pattern = data_pattern
-        self.index_pattern = index_pattern
-        self.splits = splits
+        self.file_list = file_list
         self.description = description
+        self.worker_nums = 1
+        self.worker_id = 0
         self.shuffle_queue_size = shuffle_queue_size
         self.transform = transform
 
@@ -126,7 +124,7 @@ class MultiTFRecordDataset(torch.utils.data.IterableDataset):
         if worker_info is not None:
             np.random.seed(worker_info.seed % np.iinfo(np.uint32).max)
         it = reader.multi_tfrecord_loader(
-            self.data_pattern, self.index_pattern, self.splits, self.description)
+            self.file_list, self.worker_nums, self.worker_id, self.description)
         if self.shuffle_queue_size:
             it = iterator_utils.shuffle_iterator(it, self.shuffle_queue_size)
         if self.transform:

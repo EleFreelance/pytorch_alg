@@ -16,7 +16,7 @@ def cycle(iterator_fn: typing.Callable) -> typing.Iterable[typing.Any]:
 
 
 def sample_iterators(iterators: typing.List[typing.Iterator],
-                     ratios: typing.List[int]) -> typing.Iterable[typing.Any]:
+                     cycle_length, block_length) -> typing.Iterable[typing.Any]:
     """Retrieve info generated from the iterator(s) according to their
     sampling ratios.
 
@@ -34,12 +34,17 @@ def sample_iterators(iterators: typing.List[typing.Iterator],
         Decoded bytes of features into its respective data types from
         an iterator (based off their sampling ratio).
     """
+    # 为了保证次序性，必须轮流从loader中取出样本
     iterators = [cycle(iterator) for iterator in iterators]
-    ratios = np.array(ratios)
-    ratios = ratios / ratios.sum()
+    choice = 0  # 索引
+    count = 0  # 计数
     while True:
-        choice = np.random.choice(len(ratios), p=ratios)
+        choice = choice % cycle_length
+        count += 1
         yield next(iterators[choice])
+        if count % block_length == 0:
+            choice += 1
+            count = 0
 
 
 def shuffle_iterator(iterator: typing.Iterator,

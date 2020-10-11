@@ -11,9 +11,7 @@ import numpy as np
 from datasets.tfrecord import example_pb2, iterator_utils
 
 
-def tfrecord_iterator(data_path: str,
-                      index_path: typing.Optional[str] = None,
-                      shard: typing.Optional[typing.Tuple[int, int]] = None
+def tfrecord_iterator(file_path: str, worker_nums, worker_id
                       ) -> typing.Iterable[memoryview]:
     """Create an iterator over the tfrecord dataset.
 
@@ -40,7 +38,7 @@ def tfrecord_iterator(data_path: str,
         Object referencing the specified `datum_bytes` contained in the
         file (for a single record).
     """
-    file = io.open(data_path, "rb")
+    file = io.open(file_path, "rb")
 
     length_bytes = bytearray(8)
     crc_bytes = bytearray(4)
@@ -52,7 +50,7 @@ def tfrecord_iterator(data_path: str,
         if start_offset is not None:
             file.seek(start_offset)
         if end_offset is None:
-            end_offset = os.path.getsize(data_path)
+            end_offset = os.path.getsize(file_path)
         while file.tell() < end_offset:
             if file.readinto(length_bytes) != 8:
                 raise RuntimeError("Failed to read the record size.")
@@ -68,31 +66,21 @@ def tfrecord_iterator(data_path: str,
                 raise RuntimeError("Failed to read the end token.")
             yield datum_bytes_view
 
-    if index_path is None:
+    if worker_nums is 0 or worker_nums is 1:
         yield from read_records()
     else:
-        # index应该是一个根据batch_size与total_size的生成器或迭代器
-        index = np.loadtxt(index_path, dtype=np.int64)[:, 0]
-        if shard is None:
-            offset = np.random.choice(index)
-            yield from read_records(offset)
-            yield from read_records(0, offset)
-        else:
-            num_records = len(index)
-            shard_idx, shard_count = shard
-            start_index = (num_records * shard_idx) // shard_count
-            end_index = (num_records * (shard_idx + 1)) // shard_count
-            start_byte = index[start_index]
-            end_byte = index[end_index] if end_index < num_records else None
-            yield from read_records(start_byte, end_byte)
+        # 生成tfrecord的时候需要注意，字节数与worker_nums数要成比例
+        total_byte = os.path.getsize(file_path)
+        start_byte = (total_byte * worker_id) // worker_nums
+        end_byte = (total_byte * (worker_id + 1)) // worker_nums
+        yield from read_records(start_byte, end_byte)
 
     file.close()
 
 
-def tfrecord_loader(data_path: str,
-                    index_path: typing.Union[str, None],
+def tfrecord_loader(file_path: str,
+                    worker_nums, worker_id,
                     description: typing.Union[typing.List[str], typing.Dict[str, str], None] = None,
-                    shard: typing.Optional[typing.Tuple[int, int]] = None,
                     ) -> typing.Iterable[typing.Dict[str, np.ndarray]]:
     """Create an iterator over the (decoded) examples contained within
     the dataset.
@@ -134,7 +122,7 @@ def tfrecord_loader(data_path: str,
         "int": "int64_list"
     }
 
-    record_iterator = tfrecord_iterator(data_path, index_path, shard)
+    record_iterator = tfrecord_iterator(file_path, worker_nums, worker_id)
 
     for record in record_iterator:
         example = example_pb2.Example()
@@ -173,10 +161,8 @@ def tfrecord_loader(data_path: str,
         yield features
 
 
-def multi_tfrecord_loader(data_pattern: str,
-                          index_pattern: typing.Union[str, None],
-                          splits: typing.Dict[str, float],
-                          description: typing.Union[typing.List[str], typing.Dict[str, str], None] = None,
+def multi_tfrecord_loader(file_list: list, worker_nums, worker_id,
+                          description: typing.Union[typing.List[str], typing.Dict[str, str], None] = None
                           ) -> typing.Iterable[typing.Dict[str, np.ndarray]]:
     """Create an iterator by reading and merging multiple tfrecord datasets.
 
@@ -208,9 +194,8 @@ def multi_tfrecord_loader(data_pattern: str,
     it: iterator
         A repeating iterator that generates batches of data.
     """
-    loaders = [functools.partial(tfrecord_loader, data_path=data_pattern.format(split),
-                                 index_path=index_pattern.format(split) \
-                                     if index_pattern is not None else None,
+
+    loaders = [functools.partial(tfrecord_loader, data_path=file, worker_nums=worker_nums, worker_id=worker_id,
                                  description=description)
-               for split in splits.keys()]
-    return iterator_utils.sample_iterators(loaders, list(splits.values()))
+               for file in file_list]
+    return iterator_utils.sample_iterators(loaders, len(file_list), 1)
